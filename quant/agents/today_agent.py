@@ -14,11 +14,11 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-load_dotenv(ROOT / ".env")
+load_dotenv(REPO_ROOT / ".env")
 
 from quant.agents.fingerprint_agent import (  # noqa: E402
     MODEL_PATH,

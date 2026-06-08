@@ -12,12 +12,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Ensure repository root is on sys.path when run as a script.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 

@@ -4,9 +4,7 @@ Tests for macro market data ingestion pipeline.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from quant.pipelines.macro_ingestion import (
     build_macro_dataframe,

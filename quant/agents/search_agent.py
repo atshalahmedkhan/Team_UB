@@ -11,11 +11,11 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-load_dotenv(ROOT / ".env")
+load_dotenv(REPO_ROOT / ".env")
 
 from quant.storage.mongo_client import db  # noqa: E402
 
@@ -192,6 +192,31 @@ def bulk_index_market_states(client: Optional[Any] = None) -> dict[str, int]:
         return {"indexed": 0, "failed": len(actions), "skipped": 0}
 
 
+def _mongo_knn_fallback(query_vector: list[float], k: int) -> list[dict[str, Any]]:
+    """Cosine kNN over MongoDB market_states when Elastic is unavailable."""
+    from quant.storage.elastic_index import knn_query
+
+    neighbors = knn_query(query_vector, k=k)
+    hits: list[dict[str, Any]] = []
+    for neighbor in neighbors:
+        date = neighbor.get("date")
+        doc = db["market_states"].find_one({"date": date}) if db is not None else None
+        raw = (doc or {}).get("raw") or {}
+        hits.append(
+            {
+                "date": date,
+                "similarity_score": float(neighbor.get("similarity", 0.0)),
+                "ret_30d": (doc or {}).get("ret_30d"),
+                "ret_60d": (doc or {}).get("ret_60d"),
+                "ret_90d": (doc or {}).get("ret_90d"),
+                "regime_label": (doc or {}).get("regime_label"),
+                "raw_vix": raw.get("vix"),
+                "raw_spread_2s10s": raw.get("spread_2s10s"),
+            }
+        )
+    return hits
+
+
 def search_analogs(
     query_vector: list[float],
     k: int = 10,
@@ -199,6 +224,8 @@ def search_analogs(
 ) -> list[dict[str, Any]]:
     """
     Run kNN cosine search for historical analog market states.
+
+    Uses Elasticsearch when configured; falls back to MongoDB cosine similarity.
 
     Args:
         query_vector: 15-dimensional PCA fingerprint for today.
@@ -209,49 +236,51 @@ def search_analogs(
         list[dict]: Analog hits with date, similarity_score, returns, regime, raw fields.
     """
     es = client or get_elastic_client()
-    if es is None:
-        print("Warning: Elastic unavailable — returning empty analog list.")
+    if es is not None:
+        try:
+            response = es.search(
+                index=INDEX_NAME,
+                knn={
+                    "field": "market_vector",
+                    "query_vector": query_vector,
+                    "k": k,
+                    "num_candidates": max(k * 10, 100),
+                },
+                _source=[
+                    "date",
+                    "ret_30d",
+                    "ret_60d",
+                    "ret_90d",
+                    "regime_label",
+                    "raw_vix",
+                    "raw_spread_2s10s",
+                ],
+            )
+            hits: list[dict[str, Any]] = []
+            for hit in response.get("hits", {}).get("hits", []):
+                source = hit.get("_source", {})
+                hits.append(
+                    {
+                        "date": source.get("date"),
+                        "similarity_score": float(hit.get("_score", 0.0)),
+                        "ret_30d": source.get("ret_30d"),
+                        "ret_60d": source.get("ret_60d"),
+                        "ret_90d": source.get("ret_90d"),
+                        "regime_label": source.get("regime_label"),
+                        "raw_vix": source.get("raw_vix"),
+                        "raw_spread_2s10s": source.get("raw_spread_2s10s"),
+                    }
+                )
+            return hits
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: Elastic kNN failed ({exc}) — using MongoDB fallback.")
+
+    if db is None:
+        print("Warning: MongoDB unavailable — returning empty analog list.")
         return []
 
-    try:
-        response = es.search(
-            index=INDEX_NAME,
-            knn={
-                "field": "market_vector",
-                "query_vector": query_vector,
-                "k": k,
-                "num_candidates": max(k * 10, 100),
-            },
-            _source=[
-                "date",
-                "ret_30d",
-                "ret_60d",
-                "ret_90d",
-                "regime_label",
-                "raw_vix",
-                "raw_spread_2s10s",
-            ],
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"Warning: kNN search failed: {exc}")
-        return []
-
-    hits: list[dict[str, Any]] = []
-    for hit in response.get("hits", {}).get("hits", []):
-        source = hit.get("_source", {})
-        hits.append(
-            {
-                "date": source.get("date"),
-                "similarity_score": float(hit.get("_score", 0.0)),
-                "ret_30d": source.get("ret_30d"),
-                "ret_60d": source.get("ret_60d"),
-                "ret_90d": source.get("ret_90d"),
-                "regime_label": source.get("regime_label"),
-                "raw_vix": source.get("raw_vix"),
-                "raw_spread_2s10s": source.get("raw_spread_2s10s"),
-            }
-        )
-    return hits
+    print("Warning: Elastic unavailable — using MongoDB cosine fallback.")
+    return _mongo_knn_fallback(query_vector, k)
 
 
 def main() -> None:

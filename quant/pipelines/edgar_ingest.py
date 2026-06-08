@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import requests
 from bson import ObjectId
@@ -191,9 +191,6 @@ def _fetch_filing_text(
     efts_response.raise_for_status()
     hits = efts_response.json().get("hits", {}).get("hits", [])
     if hits:
-        source = hits[0].get("_source", {})
-        for key in ("file_description", "display_names", "period_ending"):
-            pass
         # EFTS index does not return full body; retry archives index.htm
         index_url = (
             f"https://www.sec.gov/Archives/edgar/data/{cik_numeric}/"

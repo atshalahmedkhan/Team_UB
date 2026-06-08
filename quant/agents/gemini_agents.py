@@ -14,53 +14,176 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-load_dotenv(ROOT / ".env")
+load_dotenv(REPO_ROOT / ".env")
 
 from quant.agents.search_agent import search_analogs  # noqa: E402
 from quant.agents.today_agent import describe_regime, get_today_vector  # noqa: E402
 from quant.storage.mongo_client import db  # noqa: E402
 
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+# Short names that work on AI Studio but not Vertex AI without remapping.
+_VERTEX_MODEL_ALIASES = {
+    "gemini-2.0-flash": "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite": "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-001": "gemini-2.5-flash-lite",
+}
 AGENT1_MAX_FILING_CHARS = 30_000
 MAX_FILING_CHARS = 50_000
 MAX_RETRIES = 5
 RETRY_BASE_SEC = 15
+_INVISIBLE_CHARS = ("\u200b", "\ufeff", "\xa0")
+
+
+def get_gemini_model() -> str:
+    """Return the configured Gemini model id (with Vertex aliases applied)."""
+    model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip()
+    if use_vertexai():
+        return _VERTEX_MODEL_ALIASES.get(model, model)
+    return model
+
+
+def use_vertexai() -> bool:
+    """Return True when Gemini should use Vertex AI (GCP billing / credits)."""
+    flag = os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def get_gcp_project() -> str:
+    """Return GCP project id for Vertex AI."""
+    project = (
+        os.getenv("GCP_PROJECT_ID")
+        or os.getenv("GOOGLE_CLOUD_PROJECT")
+        or ""
+    ).strip()
+    if not project:
+        raise RuntimeError(
+            "Vertex AI mode requires GCP_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) in .env."
+        )
+    return project
+
+
+def get_gcp_location() -> str:
+    """Return GCP region for Vertex AI."""
+    return (
+        os.getenv("GCP_LOCATION")
+        or os.getenv("GOOGLE_CLOUD_LOCATION")
+        or "us-central1"
+    ).strip()
+
+
+def get_auth_mode() -> str:
+    """Return ``vertex`` or ``aistudio``."""
+    return "vertex" if use_vertexai() else "aistudio"
+
+
+def _sanitize_api_key(raw: str) -> str:
+    """Strip whitespace, quotes, and invisible characters from an API key."""
+    key = raw.strip().strip("\"'")
+    for ch in _INVISIBLE_CHARS:
+        key = key.replace(ch, "")
+    return key
+
+
+def _validate_api_key_ascii(key: str) -> None:
+    """Reject API keys that would break httpx ASCII header encoding."""
+    for idx, ch in enumerate(key):
+        if ord(ch) > 127:
+            raise RuntimeError(
+                f"GOOGLE_API_KEY contains invalid character {ch!r} (U+{ord(ch):04X}) "
+                f"at position {idx}. Re-copy from https://aistudio.google.com/apikey "
+                "(keys are ~39 ASCII chars starting with AIza)."
+            )
 
 
 def _get_api_key() -> str:
     """
-    Resolve Gemini API key from environment (GOOGLE_API_KEY or GEMINI_API_KEY).
+    Resolve Gemini API key from environment (AI Studio mode only).
 
     Returns:
         str: API key string.
 
     Raises:
-        RuntimeError: If no key is configured.
+        RuntimeError: If no key is configured or key contains non-ASCII chars.
     """
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    api_key = (
+        os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("GEMINI_AGENTIC_PLATFORM_API_KEY")
+    )
     if not api_key:
         raise RuntimeError(
             "No Gemini API key found. Set GOOGLE_API_KEY in .env "
-            "(create one at https://aistudio.google.com/apikey)."
+            "(create one at https://aistudio.google.com/apikey), "
+            "or enable Vertex AI: GOOGLE_GENAI_USE_VERTEXAI=true with GCP_PROJECT_ID."
         )
-    return api_key.strip()
+    key = _sanitize_api_key(api_key)
+    _validate_api_key_ascii(key)
+    if not (35 <= len(key) <= 45):
+        print(
+            f"  Warning: GOOGLE_API_KEY length is {len(key)} chars "
+            "(expected ~39). Key may be corrupted."
+        )
+    return key
+
+
+def validate_gemini_auth() -> None:
+    """
+    Verify Gemini auth is configured for the active mode.
+
+    Raises:
+        RuntimeError: If Vertex project/ADC or AI Studio key is missing.
+    """
+    if use_vertexai():
+        project = get_gcp_project()
+        os.environ.setdefault(
+            "GOOGLE_CLOUD_QUOTA_PROJECT",
+            os.getenv("GOOGLE_CLOUD_QUOTA_PROJECT") or project,
+        )
+        try:
+            import google.auth
+
+            google.auth.default()
+        except Exception as exc:
+            raise RuntimeError(
+                "Vertex AI mode requires Application Default Credentials. Run:\n"
+                "  gcloud auth application-default login\n"
+                "  gcloud config set project "
+                f"{get_gcp_project()}\n"
+                f"Original error: {exc}"
+            ) from exc
+    else:
+        _get_api_key()
 
 
 def _get_client() -> Any:
     """
-    Create a google-genai client from GOOGLE_API_KEY.
+    Create a google-genai client for Vertex AI or AI Studio.
 
     Returns:
         genai.Client: Configured Gemini client.
 
     Raises:
-        RuntimeError: If GOOGLE_API_KEY is missing.
+        RuntimeError: If auth is not configured.
     """
     from google import genai
+
+    if use_vertexai():
+        validate_gemini_auth()
+        project = get_gcp_project()
+        os.environ.setdefault(
+            "GOOGLE_CLOUD_QUOTA_PROJECT",
+            os.getenv("GOOGLE_CLOUD_QUOTA_PROJECT") or project,
+        )
+        return genai.Client(
+            vertexai=True,
+            project=project,
+            location=get_gcp_location(),
+        )
 
     return genai.Client(api_key=_get_api_key())
 
@@ -76,17 +199,30 @@ def _format_gemini_error(exc: Exception) -> str:
         str: Actionable error text.
     """
     err_str = str(exc)
+    if use_vertexai():
+        if "403" in err_str or "PERMISSION_DENIED" in err_str:
+            project = get_gcp_project()
+            return (
+                "Vertex AI Gemini call failed (403 PERMISSION_DENIED).\n"
+                "Fix:\n"
+                f"  1. Enable Vertex AI API on project {project}:\n"
+                "     https://console.cloud.google.com/apis/library/aiplatform.googleapis.com\n"
+                "  2. Run: gcloud auth application-default login\n"
+                f"  3. Run: gcloud config set project {project}\n"
+                f"Original error: {exc}"
+            )
+        return str(exc)
+
     if "403" in err_str or "PERMISSION_DENIED" in err_str or "API_KEY_SERVICE_BLOCKED" in err_str:
         return (
             "Gemini API access is blocked for this API key (403 PERMISSION_DENIED).\n"
-            "Fix:\n"
-            "  1. Create a new key at https://aistudio.google.com/apikey\n"
-            "     (keys usually start with AIza…, not OAuth-style tokens).\n"
-            "  2. In Google Cloud Console → APIs & Services → Enabled APIs,\n"
-            "     enable 'Generative Language API' for the key's project.\n"
-            "  3. If the key has 'API restrictions', allow Generative Language API\n"
-            "     or use an unrestricted key for development.\n"
-            "  4. Put the key in quant/.env as GOOGLE_API_KEY=your_key_here\n"
+            "AI Studio keys do NOT use GCP $300 credits. For GCP billing, set:\n"
+            "  GOOGLE_GENAI_USE_VERTEXAI=true\n"
+            "  GCP_PROJECT_ID=your-project\n"
+            "Or fix AI Studio:\n"
+            "  1. Create a key at https://aistudio.google.com/apikey\n"
+            "  2. Enable Generative Language API in Cloud Console\n"
+            "  3. Put key in .env as GOOGLE_API_KEY=your_key_here\n"
             f"Original error: {exc}"
         )
     return str(exc)
@@ -113,7 +249,7 @@ def _call_gemini(prompt: str) -> str:
     for attempt in range(MAX_RETRIES):
         try:
             response = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=get_gemini_model(),
                 contents=prompt,
             )
             return (response.text or "").strip()

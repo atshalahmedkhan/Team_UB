@@ -11,3 +11,4 @@ data/cache/
 dist/
 build/
 .DS_Store
+quant/reports/

@@ -20,6 +20,13 @@ elasticsearch>=8.0
 # UI
 streamlit>=1.30
 
+# API
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# Gemini
+google-genai>=1.0
+
 # GCP (uncomment when Agent Builder SDK wired)
 # google-cloud-aiplatform>=1.60
 

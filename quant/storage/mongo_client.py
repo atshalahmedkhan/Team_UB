@@ -7,7 +7,6 @@ Loads connection settings from environment variables via python-dotenv.
 from __future__ import annotations
 
 import os
-import sys
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -36,7 +35,11 @@ def get_client() -> MongoClient:
     if _client is not None:
         return _client
 
-    mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+    mongo_uri = (
+        os.getenv("MONGO_URI")
+        or os.getenv("MONGODB_URI")
+        or os.getenv("CONNECTION_STRING")
+    )
     if not mongo_uri:
         raise RuntimeError(
             "MONGO_URI (or MONGODB_URI) is not set. Copy .env.example to .env "
@@ -52,7 +55,27 @@ def get_client() -> MongoClient:
             "(credentials, network access, and cluster hostname)."
         ) from exc
 
+    refresh_db()
     return _client
+
+
+def refresh_db() -> Optional[Database]:
+    """
+    Re-resolve the module-level ``db`` handle after a successful client connect.
+
+    Returns:
+        Optional[Database]: Connected database, or None if unavailable.
+    """
+    global _db, db
+
+    try:
+        db_name = os.getenv("MONGO_DB_NAME") or os.getenv("MONGODB_DB", "quant")
+        _db = get_client()[db_name]
+        db = _db
+    except RuntimeError:
+        _db = None
+        db = None  # type: ignore[assignment]
+    return db
 
 
 def get_database() -> Database:

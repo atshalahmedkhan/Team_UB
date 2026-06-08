@@ -78,8 +78,11 @@ def load_market_states_without_vector() -> list[dict[str, Any]]:
 
     cursor = db["market_states"].find(
         {
-            "market_vector": None,
             "date": {"$ne": "today"},
+            "$or": [
+                {"market_vector": None},
+                {"market_vector": {"$exists": False}},
+            ],
         },
         sort=[("date", 1)],
     )
@@ -104,7 +107,9 @@ def _zscore_row_from_doc(doc: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def backfill_normalized_zscores(dates: list[str]) -> int:
+def backfill_normalized_zscores(
+    dates: list[str],
+) -> dict[str, dict[str, Optional[float]]]:
     """
     Recompute normalized z-scores from raw data for dates with null z-scores.
 
@@ -115,11 +120,12 @@ def backfill_normalized_zscores(dates: list[str]) -> int:
         dates: Date strings to backfill.
 
     Returns:
-        int: Number of MongoDB documents updated.
+        dict[str, dict]: Date string -> normalized field dict for backfilled rows.
     """
     if not dates or db is None:
-        return 0
+        return {}
 
+    print(f"  Backfilling z-scores for {len(dates)} dates...")
     cursor = db["market_states"].find(
         {"date": {"$nin": ["today", None]}},
         {"date": 1, "raw": 1},
@@ -133,15 +139,20 @@ def backfill_normalized_zscores(dates: list[str]) -> int:
         }
 
     if not raw_rows:
-        return 0
+        return {}
 
     raw_df = pd.DataFrame.from_dict(raw_rows, orient="index")
     raw_df.index = pd.to_datetime(raw_df.index)
     raw_df = raw_df.sort_index()
     norm_df = normalize_dataframe(raw_df)
 
+    from pymongo import UpdateOne
+
     collection = db["market_states"]
-    updated = 0
+    backfilled: dict[str, dict[str, Optional[float]]] = {}
+    batch: list[UpdateOne] = []
+    batch_size = 500
+
     for date_str in dates:
         ts = pd.Timestamp(date_str)
         if ts not in norm_df.index:
@@ -150,12 +161,20 @@ def backfill_normalized_zscores(dates: list[str]) -> int:
         normalized = {
             str(k): _to_python_float(v) for k, v in norm_row.items()
         }
-        collection.update_one({"date": date_str}, {"$set": {"normalized": normalized}})
-        updated += 1
+        backfilled[date_str] = normalized
+        batch.append(
+            UpdateOne({"date": date_str}, {"$set": {"normalized": normalized}})
+        )
+        if len(batch) >= batch_size:
+            collection.bulk_write(batch, ordered=False)
+            batch = []
 
-    if updated:
-        print(f"  Backfilled normalized z-scores for {updated} early-history dates")
-    return updated
+    if batch:
+        collection.bulk_write(batch, ordered=False)
+
+    if backfilled:
+        print(f"  Backfilled normalized z-scores for {len(backfilled)} dates")
+    return backfilled
 
 
 def build_zscore_matrix(
@@ -186,24 +205,20 @@ def build_zscore_matrix(
             needs_backfill.append(date_str)
 
     if needs_backfill:
-        backfill_normalized_zscores(needs_backfill)
+        backfilled = backfill_normalized_zscores(needs_backfill)
         for date_str in needs_backfill:
-            refreshed = db["market_states"].find_one({"date": date_str}) if db is not None else None
-            if refreshed:
-                zscore_row = _zscore_row_from_doc(refreshed)
-                if zscore_row:
-                    rows.append(zscore_row)
-                    dates.append(date_str)
-                else:
-                    # Warm-up period: rolling z-scores are undefined — use zeros
-                    norm = refreshed.get("normalized") or {}
-                    zscore_keys = [k for k in norm if k.endswith("_zscore")]
-                    if zscore_keys:
-                        rows.append({k: 0.0 for k in zscore_keys})
-                        dates.append(date_str)
-                    elif feature_columns:
-                        rows.append({k: 0.0 for k in feature_columns})
-                        dates.append(date_str)
+            norm = backfilled.get(date_str) or {}
+            zscore_row = {
+                k: float(v)
+                for k, v in norm.items()
+                if k.endswith("_zscore") and v is not None
+            }
+            if zscore_row:
+                rows.append(zscore_row)
+                dates.append(date_str)
+            elif feature_columns:
+                rows.append({k: 0.0 for k in feature_columns})
+                dates.append(date_str)
 
     if not rows:
         raise ValueError(
@@ -321,23 +336,36 @@ def _encode_documents(
     matrix = clean_feature_matrix(matrix)
     transformed = pca.transform(matrix.values)
 
+    from pymongo import UpdateOne
+
     collection = db["market_states"]
     encoded = 0
+    batch: list[UpdateOne] = []
+    batch_size = 500
+
     for i, date_str in enumerate(matrix.index):
         vector = transformed[i]
         regime = assign_regime_label(vector, component_stds)
-        collection.update_one(
-            {"date": date_str},
-            {
-                "$set": {
-                    "market_vector": _vector_to_list(vector),
-                    "regime_label": regime,
-                }
-            },
+        batch.append(
+            UpdateOne(
+                {"date": date_str},
+                {
+                    "$set": {
+                        "market_vector": _vector_to_list(vector),
+                        "regime_label": regime,
+                    }
+                },
+            )
         )
-        encoded += 1
-        if encoded % 100 == 0:
+        if len(batch) >= batch_size:
+            collection.bulk_write(batch, ordered=False)
+            encoded += len(batch)
             print(f"  Encoded {encoded} documents...")
+            batch = []
+
+    if batch:
+        collection.bulk_write(batch, ordered=False)
+        encoded += len(batch)
 
     return encoded
 
@@ -360,14 +388,36 @@ def fit_and_encode(
     if db is None:
         raise RuntimeError("MongoDB is not connected. Set MONGO_URI in .env.")
 
+    print("[FINGERPRINT] Starting PCA fingerprint encode...")
     print("[FINGERPRINT] Loading market_states without market_vector...")
     pending = documents if documents is not None else load_market_states_without_vector()
+    artifact = load_pca_artifact()
+
     if not pending:
+        if artifact is None:
+            print("  All vectors present but PCA model missing — refitting from history")
+            all_docs = load_all_documents_for_fit()
+            matrix, feature_columns = build_zscore_matrix(all_docs)
+            matrix = clean_feature_matrix(matrix)
+            print(f"  Fitting PCA with n_components={N_COMPONENTS} on {len(matrix)} rows...")
+            pca = PCA(n_components=N_COMPONENTS)
+            transformed = pca.fit_transform(matrix.values)
+            component_stds = np.std(transformed, axis=0)
+            MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(
+                {
+                    "pca": pca,
+                    "feature_columns": feature_columns,
+                    "component_stds": component_stds,
+                },
+                MODEL_PATH,
+            )
+            print(f"  Saved PCA model -> {MODEL_PATH}")
+            return {"encoded": 0, "skipped": 0, "model_saved": 1}
         print("  No documents to encode (all vectors present).")
         return {"encoded": 0, "skipped": 0, "model_saved": 0}
 
     print(f"  Found {len(pending)} documents to encode")
-    artifact = load_pca_artifact()
 
     if artifact is not None:
         print("  Using saved PCA model (incremental encode)")

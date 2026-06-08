@@ -5,8 +5,6 @@ Tests for SEC EDGAR filing ingestion pipeline.
 from __future__ import annotations
 
 from datetime import datetime
-
-import pytest
 from bson import ObjectId
 
 from quant.pipelines.edgar_ingest import get_cik, ingest_ticker
