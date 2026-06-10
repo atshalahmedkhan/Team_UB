@@ -43,18 +43,24 @@ def main() -> None:
         sys.exit(1)
 
     start = time.perf_counter()
-    report, timings = run_full_analysis(symbol)
+    result = run_full_analysis(symbol)
     elapsed = time.perf_counter() - start
 
     print("\n--- Agent timings ---")
-    for name, sec in timings.items():
+    for name, sec in result.timings.items():
         print(f"  {name}: {sec:.1f}s")
 
+    rejections = result.report_json.get("audit", {}).get("rejections", [])
+    if rejections:
+        print("\n--- Grader rejections (Agent 2 retries) ---")
+        for entry in rejections:
+            print(f"  • {entry}")
+
     print("\n" + "=" * 60)
-    print(report)
+    print(result.markdown)
     print("=" * 60)
 
-    out_path = save_report(symbol, report)
+    out_path = save_report(symbol, result.markdown, result.report_json)
     print(
         f"\nAnalysis complete in {elapsed:.0f}s. "
         f"Report saved to {out_path}"

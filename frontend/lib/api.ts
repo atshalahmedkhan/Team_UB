@@ -12,6 +12,8 @@ export type SSEEvent =
   | {
       type: "complete";
       report: string;
+      report_json?: Record<string, unknown>;
+      rejections?: Array<Record<string, unknown>>;
       timings: Record<string, number>;
       saved_path: string;
     }

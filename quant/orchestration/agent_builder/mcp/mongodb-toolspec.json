@@ -1,0 +1,31 @@
+{
+  "tools": [
+    {
+      "name": "find",
+      "description": "Find documents in a MongoDB collection (filings, market_states, reports).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": { "type": "string", "description": "Database name, e.g. quant" },
+          "collection": { "type": "string", "description": "Collection name, e.g. filings" },
+          "filter": { "type": "object", "description": "MongoDB query filter, e.g. {\"ticker\": \"NVDA\"}" },
+          "limit": { "type": "integer", "default": 10 }
+        },
+        "required": ["database", "collection"]
+      }
+    },
+    {
+      "name": "aggregate",
+      "description": "Run a MongoDB aggregation pipeline on a collection.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": { "type": "string" },
+          "collection": { "type": "string" },
+          "pipeline": { "type": "array", "description": "Aggregation pipeline stages" }
+        },
+        "required": ["database", "collection", "pipeline"]
+      }
+    }
+  ]
+}

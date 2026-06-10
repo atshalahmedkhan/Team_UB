@@ -91,17 +91,24 @@ async def analyze_stream(ticker: str) -> StreamingResponse:
 
     async def run_pipeline() -> None:
         try:
-            report, timings = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 run_full_analysis,
                 symbol,
                 on_progress,
             )
-            path = await asyncio.to_thread(save_report, symbol, report)
+            path = await asyncio.to_thread(
+                save_report,
+                symbol,
+                result.markdown,
+                result.report_json,
+            )
             await queue.put(
                 {
                     "type": "complete",
-                    "report": report,
-                    "timings": timings,
+                    "report": result.markdown,
+                    "report_json": result.report_json,
+                    "rejections": result.report_json.get("audit", {}).get("rejections", []),
+                    "timings": result.timings,
                     "saved_path": str(path),
                 }
             )

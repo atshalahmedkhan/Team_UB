@@ -133,6 +133,17 @@ def main() -> None:
     elastic_ok = bool(os.getenv("ELASTIC_URL") and os.getenv("ELASTIC_API_KEY"))
     _status(elastic_ok, "Elastic (optional — Mongo fallback used if missing)")
 
+    use_mcp = os.getenv("USE_MCP_TOOLS", "").strip().lower() in ("1", "true", "yes", "on")
+    if use_mcp:
+        _status(bool(os.getenv("MONGODB_MCP_URL")), "MongoDB MCP URL (Agent Builder)")
+        _status(bool(os.getenv("ELASTIC_MCP_URL")), "Elastic MCP URL (Agent Builder)")
+        try:
+            from quant.orchestration.mcp_client import mongodb_mcp_health
+
+            _status(mongodb_mcp_health(), "MongoDB MCP reachable")
+        except Exception as exc:
+            _status(False, "MongoDB MCP reachable", str(exc)[:120])
+
     _status(MODEL_PATH.exists(), "PCA model", str(MODEL_PATH))
 
     print("\n--- Pipeline readiness ---")

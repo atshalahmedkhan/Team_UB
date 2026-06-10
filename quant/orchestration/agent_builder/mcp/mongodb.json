@@ -1,0 +1,16 @@
+{
+  "id": "mongodb-quant",
+  "display_name": "MongoDB Atlas MCP",
+  "transport": "streamable_http",
+  "endpoint_template": "{MONGODB_MCP_URL}",
+  "auth": "none",
+  "partner": "MongoDB",
+  "read_only": true,
+  "collections": ["filings", "market_states", "reports"],
+  "agent_bindings": {
+    "agent1_extraction": ["find", "aggregate", "update"],
+    "agent3_narrative_drift": ["find", "aggregate"],
+    "agent4_fingerprint": ["find"]
+  },
+  "registration_console": "Vertex AI → Agent Builder → Tools → Register MCP server"
+}

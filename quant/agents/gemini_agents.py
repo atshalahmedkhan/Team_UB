@@ -555,27 +555,6 @@ def run_analog_search_agent(vector: list[float], k: int = 10) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _validate_agents(extracted: dict[str, Any], quant_model: dict[str, Any]) -> list[str]:
-    """
-    Cross-check Agent 1 extracted revenue against Agent 2 assumptions.
-
-    Args:
-        extracted: Extraction output.
-        quant_model: Quant model output.
-
-    Returns:
-        list[str]: Validation warning messages.
-    """
-    warnings: list[str] = []
-    ext_rev = extracted.get("revenue")
-    quant_str = json.dumps(quant_model)
-    if ext_rev is not None and str(ext_rev) not in quant_str:
-        warnings.append(
-            f"Revenue mismatch: extracted revenue={ext_rev} not referenced in quant model."
-        )
-    return warnings
-
-
 def run_synthesis_agent(
     ticker: str,
     extracted: dict[str, Any],
@@ -583,89 +562,27 @@ def run_synthesis_agent(
     narrative_drift: list[dict[str, Any]],
     fingerprint: dict[str, Any],
     analog_result: dict[str, Any],
-) -> str:
+    *,
+    rejections_log: list[dict[str, Any]] | None = None,
+    validation_warnings: list[str] | None = None,
+) -> dict[str, Any]:
     """
     Validate agent outputs and synthesize the final four-section report.
 
-    Args:
-        ticker: Stock symbol.
-        extracted: Agent 1 output.
-        quant_model: Agent 2 output.
-        narrative_drift: Agent 3 output.
-        fingerprint: Agent 4 output.
-        analog_result: Agent 5 output.
-
     Returns:
-        str: Complete markdown report.
+        dict: ``markdown``, ``report`` (JSON), ``validation_warnings``, ``rejections``.
     """
+    from quant.agents.agent6_grader import run as grader_run
+
     print(f"[Agent 6] Adversarial grader + synthesis — {ticker}")
-    validation_warnings = _validate_agents(extracted, quant_model)
-
-    analogs = analog_result.get("analogs", [])[:3]
-    top_analog_lines = []
-    for a in analogs:
-        ret90 = a.get("ret_90d")
-        ret_str = f"{ret90 * 100:.1f}%" if ret90 is not None else "N/A"
-        top_analog_lines.append(
-            f"- {a.get('date')} (similarity={a.get('similarity_score', 0):.3f}, "
-            f"90d return={ret_str}, regime={a.get('regime_label')})"
-        )
-
-    drift_sorted = sorted(
+    return grader_run(
+        ticker,
+        extracted,
+        quant_model,
         narrative_drift,
-        key=lambda x: x.get("materiality_score", 0),
-        reverse=True,
+        fingerprint,
+        analog_result,
+        rejections_log=rejections_log,
+        validation_warnings=validation_warnings,
+        synthesize_sections_3_4=_generate_text,
     )
-
-    section1 = "## SECTION 1 — EARNINGS SUMMARY\n"
-    section1 += f"- Revenue: {extracted.get('revenue')}\n"
-    section1 += f"- Net income: {extracted.get('net_income')}\n"
-    section1 += f"- EPS: {extracted.get('eps')}\n"
-    section1 += f"- Gross margin: {extracted.get('gross_margin')}\n"
-    section1 += f"- Operating margin: {extracted.get('operating_margin')}\n"
-    section1 += f"- Beat/miss: {quant_model.get('beat_miss_assessment', 'N/A')}\n"
-    flags = quant_model.get("flags") or []
-    for flag in flags[:5]:
-        section1 += f"- Flag: {flag}\n"
-
-    section2 = "## SECTION 2 — THESIS FLAG CHANGES\n"
-    for item in drift_sorted[:8]:
-        section2 += (
-            f"- [{item.get('materiality_score', '?')}/10] "
-            f"{item.get('topic')}: {item.get('shift_description')} "
-            f"({item.get('tone')})\n"
-        )
-
-    macro_prompt = f"""Write two report sections in markdown for {ticker}.
-
-SECTION 3 — MACRO REGIME CONTEXT
-Today's regime: {fingerprint.get('regime_label')}
-Description: {fingerprint.get('description')}
-Top analog dates:
-{chr(10).join(top_analog_lines)}
-Median 90d return across analogs: {analog_result.get('stats', {}).get('ret_90d', {}).get('median')}
-Write 2-3 paragraphs. Include a sentence like:
-"Today's market most resembles [DATE] ([REGIME]). In that environment, the S&P 500 returned X% over 90 days."
-
-SECTION 4 — ACTIONABLE RISKS
-Combine micro risks from narrative drift and macro risks from analog outcomes.
-Be specific and concrete. Use bullet points.
-
-Context:
-Extracted: {json.dumps(extracted)[:2000]}
-Quant flags: {json.dumps(quant_model.get('flags', []))}
-Drift: {json.dumps(drift_sorted[:5])}
-Validation warnings: {validation_warnings}
-"""
-    sections_3_4 = _generate_text(macro_prompt)
-
-    report = f"# Quant Analysis Report — {ticker.upper()}\n\n"
-    report += section1 + "\n"
-    report += section2 + "\n"
-    report += sections_3_4 + "\n"
-    if validation_warnings:
-        report += "\n## VALIDATION WARNINGS\n"
-        for w in validation_warnings:
-            report += f"- {w}\n"
-
-    return report

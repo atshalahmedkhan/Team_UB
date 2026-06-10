@@ -1,0 +1,9 @@
+id: agent1_extraction
+name: Agent 1 — Extraction
+model: gemini-2.5-flash-lite
+tools:
+  - mongodb-quant.find
+  - mongodb-quant.aggregate
+  - mongodb-quant.update
+python_handler: quant.agents.gemini_agents.run_extraction_agent
+output: ExtractionResult

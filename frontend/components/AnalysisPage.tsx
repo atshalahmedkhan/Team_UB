@@ -29,6 +29,7 @@ export function AnalysisPage() {
   const [timings, setTimings] = useState<Record<string, number>>({});
   const [report, setReport] = useState<string | null>(null);
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [rejections, setRejections] = useState<Array<Record<string, unknown>>>([]);
   const [runError, setRunError] = useState<string | null>(null);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
 
@@ -71,6 +72,7 @@ export function AnalysisPage() {
     setRunError(null);
     setReport(null);
     setSavedPath(null);
+    setRejections([]);
     setTimings({});
     setStatuses(initialStatuses());
     setRunStartedAt(Date.now());
@@ -84,6 +86,7 @@ export function AnalysisPage() {
       } else if (event.type === "complete") {
         setReport(event.report);
         setSavedPath(event.saved_path);
+        setRejections(event.rejections ?? []);
         setTimings(event.timings);
         setRunning(false);
       } else if (event.type === "error") {
@@ -125,6 +128,17 @@ export function AnalysisPage() {
       {runError && (
         <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-300">
           {runError}
+        </div>
+      )}
+
+      {rejections.length > 0 && (
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          <p className="font-medium text-amber-100">Grader rejected Agent 2 and retried</p>
+          <ul className="mt-2 list-inside list-disc text-amber-200/90">
+            {rejections.map((entry, index) => (
+              <li key={index}>{String(entry.reason ?? JSON.stringify(entry))}</li>
+            ))}
+          </ul>
         </div>
       )}
 

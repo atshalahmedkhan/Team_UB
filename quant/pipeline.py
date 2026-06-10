@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from quant.agents.agent6_grader import MAX_QUANT_RETRIES, grade_quant_model
 from quant.agents.gemini_agents import (
     run_analog_search_agent,
     run_extraction_agent,
@@ -22,6 +24,15 @@ REPORTS_DIR = REPO_ROOT / "quant" / "reports"
 MODEL_PATH = REPO_ROOT / "quant" / "models" / "pca_model.pkl"
 
 ProgressCallback = Callable[[str, str, Optional[float]], None]
+
+
+@dataclass
+class AnalysisResult:
+    """Output of a full six-agent run."""
+
+    markdown: str
+    timings: dict[str, float]
+    report_json: dict[str, Any]
 
 
 def check_prerequisites(ticker: str) -> list[str]:
@@ -96,9 +107,11 @@ def _notify(
 def run_full_analysis(
     ticker: str,
     on_progress: Optional[ProgressCallback] = None,
-) -> tuple[str, dict[str, float]]:
+) -> AnalysisResult:
     """
     Execute all six agents in sequence and return the final report.
+
+    Agent 2 is adversarially graded; on hard failure it retries once before synthesis.
 
     Args:
         ticker: Stock symbol (e.g. ``AAPL``).
@@ -106,10 +119,12 @@ def run_full_analysis(
             Events: ``agent_start``, ``agent_done``.
 
     Returns:
-        tuple[str, dict[str, float]]: Markdown report and per-agent timings (seconds).
+        AnalysisResult: Markdown report, timings, and structured JSON report.
     """
     symbol = ticker.upper().strip()
     timings: dict[str, float] = {}
+    rejections_log: list[dict[str, Any]] = []
+    validation_warnings: list[str] = []
 
     agent_name = "Agent 1 — Extraction"
     _notify(on_progress, "agent_start", agent_name)
@@ -119,11 +134,30 @@ def run_full_analysis(
     _notify(on_progress, "agent_done", agent_name, timings[agent_name])
 
     agent_name = "Agent 2 — Quant model"
-    _notify(on_progress, "agent_start", agent_name)
-    t0 = time.perf_counter()
-    quant_model = run_quant_model_agent(symbol, extracted)
-    timings[agent_name] = time.perf_counter() - t0
-    _notify(on_progress, "agent_done", agent_name, timings[agent_name])
+    quant_model: dict[str, Any] = {}
+    for attempt in range(MAX_QUANT_RETRIES):
+        _notify(on_progress, "agent_start", agent_name)
+        t0 = time.perf_counter()
+        quant_model = run_quant_model_agent(symbol, extracted)
+        timings[agent_name] = time.perf_counter() - t0
+        _notify(on_progress, "agent_done", agent_name, timings[agent_name])
+
+        grade = grade_quant_model(extracted, quant_model)
+        validation_warnings.extend(grade.warnings)
+        if grade.accepted:
+            break
+
+        rejections_log.append(
+            {
+                "attempt": attempt + 1,
+                "agent": agent_name,
+                "reason": "; ".join(grade.rejections),
+                "rejections": grade.rejections,
+            }
+        )
+        print(f"  [Grader] Rejected Agent 2 output (attempt {attempt + 1}/{MAX_QUANT_RETRIES})")
+        for rejection in grade.rejections:
+            print(f"    - {rejection}")
 
     agent_name = "Agent 3 — Narrative drift"
     _notify(on_progress, "agent_start", agent_name)
@@ -149,33 +183,47 @@ def run_full_analysis(
     agent_name = "Agent 6 — Synthesis"
     _notify(on_progress, "agent_start", agent_name)
     t0 = time.perf_counter()
-    report = run_synthesis_agent(
+    synthesis = run_synthesis_agent(
         symbol,
         extracted,
         quant_model,
         narrative_drift,
         fingerprint,
         analog_result,
+        rejections_log=rejections_log,
+        validation_warnings=validation_warnings,
     )
     timings[agent_name] = time.perf_counter() - t0
     _notify(on_progress, "agent_done", agent_name, timings[agent_name])
 
-    return report, timings
+    return AnalysisResult(
+        markdown=synthesis["markdown"],
+        timings=timings,
+        report_json=synthesis["report"],
+    )
 
 
-def save_report(ticker: str, report: str) -> Path:
+def save_report(ticker: str, report: str, report_json: dict[str, Any] | None = None) -> Path:
     """
-    Write the analysis report to reports/{ticker}_{date}.txt.
+    Write the analysis report to reports/{ticker}_{date}.txt (+ .json if provided).
 
     Args:
         ticker: Stock symbol.
         report: Report markdown text.
+        report_json: Optional structured report dict.
 
     Returns:
-        Path: Saved file path.
+        Path: Saved markdown file path.
     """
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = REPORTS_DIR / f"{ticker.upper()}_{date_str}.txt"
     path.write_text(report, encoding="utf-8")
+
+    if report_json is not None:
+        json_path = REPORTS_DIR / f"{ticker.upper()}_{date_str}.json"
+        import json
+
+        json_path.write_text(json.dumps(report_json, indent=2), encoding="utf-8")
+
     return path

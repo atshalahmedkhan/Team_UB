@@ -1,0 +1,41 @@
+# Quant — Agent Builder application manifest (hackathon reference).
+# Import sections into Vertex AI Agent Builder / register tools from MCP URLs in .env.
+
+name: quant-earnings-intelligence
+display_name: Quant — Earnings Intelligence
+description: >
+  Six-agent pipeline for SEC extraction, quant modeling, narrative drift,
+  macro fingerprinting, Elastic kNN analog search, and adversarial synthesis.
+
+project_id: quant-hackathon
+location: us-central1
+model: gemini-2.5-flash-lite
+
+mcp_servers:
+  - id: mongodb-quant
+    name: MongoDB Atlas (filings + market_states)
+    url_env: MONGODB_MCP_URL
+    transport: streamable_http
+    path: /mcp
+    partner_track: mongodb
+    agents: [agent1_extraction, agent3_narrative_drift, agent4_fingerprint]
+
+  - id: elastic-quant
+    name: Elastic Cloud (market-state kNN)
+    url_env: ELASTIC_MCP_URL
+    transport: http_tools
+    tools_path: /tools
+    partner_track: elastic
+    agents: [agent5_analog_search]
+
+workflow:
+  trigger:
+    type: manual
+    input: ticker
+  parallel:
+    - branch: macro
+      steps: [agent4_fingerprint, agent5_analog_search]
+    - branch: micro
+      steps: [agent1_extraction, agent2_quant_model, agent3_narrative_drift]
+  merge: agent6_grader
+  output: FinalReport

@@ -1,0 +1,8 @@
+id: agent3_narrative_drift
+name: Agent 3 — Narrative Drift
+model: gemini-2.5-flash-lite
+tools:
+  - mongodb-quant.find
+  - mongodb-quant.aggregate
+python_handler: quant.agents.gemini_agents.run_narrative_drift_agent
+output: NarrativeFlagList

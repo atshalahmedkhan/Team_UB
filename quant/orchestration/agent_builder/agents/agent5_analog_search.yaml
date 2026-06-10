@@ -1,0 +1,8 @@
+id: agent5_analog_search
+name: Agent 5 — Analog Search
+model: gemini-2.5-flash-lite
+tools:
+  - elastic-quant.market_state_knn
+  - mongodb-quant.find
+python_handler: quant.agents.gemini_agents.run_analog_search_agent
+output: AnalogSet

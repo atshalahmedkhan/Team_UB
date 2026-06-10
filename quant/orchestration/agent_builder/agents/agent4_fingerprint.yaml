@@ -1,0 +1,7 @@
+id: agent4_fingerprint
+name: Agent 4 — Market Fingerprint
+model: gemini-2.5-flash-lite
+tools:
+  - mongodb-quant.find
+python_handler: quant.agents.gemini_agents.run_fingerprint_agent
+output: MarketFingerprint

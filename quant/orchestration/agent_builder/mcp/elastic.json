@@ -1,0 +1,18 @@
+{
+  "id": "elastic-quant",
+  "display_name": "Elastic Market State MCP Bridge",
+  "transport": "http_tools",
+  "endpoint_template": "{ELASTIC_MCP_URL}",
+  "tools_catalog": "/tools",
+  "primary_tool": {
+    "name": "market_state_knn",
+    "method": "POST",
+    "path": "/tools/market_state_knn",
+    "description": "kNN search on 15-dim PCA market regime vectors (index: market-states)"
+  },
+  "partner": "Elastic",
+  "agent_bindings": {
+    "agent5_analog_search": ["market_state_knn"]
+  },
+  "registration_console": "Vertex AI → Agent Builder → Tools → Register custom HTTP tool / MCP"
+}

@@ -1,0 +1,21 @@
+# Speed up Cloud Run source uploads (api image only needs Python backend)
+.gcloudignore
+.git/
+.github/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.env.*
+frontend/
+dashboard/
+mcp/
+docs/
+tests/
+data/
+quant/reports/
+*.md
+!README.md

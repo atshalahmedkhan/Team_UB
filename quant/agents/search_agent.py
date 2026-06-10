@@ -217,6 +217,13 @@ def _mongo_knn_fallback(query_vector: list[float], k: int) -> list[dict[str, Any
     return hits
 
 
+def _coerce_vector(query_vector: list[float] | Any) -> list[float]:
+    """Normalize numpy/list vectors to plain Python floats for Elastic kNN."""
+    if hasattr(query_vector, "tolist"):
+        query_vector = query_vector.tolist()
+    return [float(x) for x in query_vector]
+
+
 def search_analogs(
     query_vector: list[float],
     k: int = 10,
@@ -235,6 +242,15 @@ def search_analogs(
     Returns:
         list[dict]: Analog hits with date, similarity_score, returns, regime, raw fields.
     """
+    vector = _coerce_vector(query_vector)
+
+    from quant.orchestration.mcp_client import elastic_mcp_knn
+
+    mcp_hits = elastic_mcp_knn(vector, k=k)
+    if mcp_hits is not None:
+        print(f"[Agent 5] Elastic MCP kNN returned {len(mcp_hits)} analogs")
+        return mcp_hits
+
     es = client or get_elastic_client()
     if es is not None:
         try:
@@ -242,7 +258,7 @@ def search_analogs(
                 index=INDEX_NAME,
                 knn={
                     "field": "market_vector",
-                    "query_vector": query_vector,
+                    "query_vector": vector,
                     "k": k,
                     "num_candidates": max(k * 10, 100),
                 },
@@ -280,7 +296,7 @@ def search_analogs(
         return []
 
     print("Warning: Elastic unavailable — using MongoDB cosine fallback.")
-    return _mongo_knn_fallback(query_vector, k)
+    return _mongo_knn_fallback(vector, k)
 
 
 def main() -> None:

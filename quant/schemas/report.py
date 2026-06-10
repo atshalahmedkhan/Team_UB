@@ -35,6 +35,12 @@ class Analog(BaseModel):
     return_90d: float | None = None
 
 
+class Audit(BaseModel):
+    agent_runs: list[str] = Field(default_factory=list)
+    rejections: list[dict] = Field(default_factory=list)
+    validation_warnings: list[str] = Field(default_factory=list)
+
+
 class FinalReport(BaseModel):
     ticker: str
     generated_at: str
@@ -44,3 +50,5 @@ class FinalReport(BaseModel):
     regime_label: str = ""
     synthesis: str = ""
     risks: list[str] = Field(default_factory=list)
+    markdown: str = ""
+    audit: Audit = Field(default_factory=Audit)

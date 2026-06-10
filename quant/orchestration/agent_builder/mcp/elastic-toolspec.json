@@ -1,0 +1,26 @@
+{
+  "tools": [
+    {
+      "name": "market_state_knn",
+      "description": "Find top-k historical market regime days similar to a 15-dim PCA vector. Used by Agent 5 analog search.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "vector": {
+            "type": "array",
+            "description": "15-dimensional PCA market fingerprint",
+            "items": { "type": "number" },
+            "minItems": 15,
+            "maxItems": 15
+          },
+          "k": {
+            "type": "integer",
+            "description": "Number of analog days to return",
+            "default": 10
+          }
+        },
+        "required": ["vector"]
+      }
+    }
+  ]
+}

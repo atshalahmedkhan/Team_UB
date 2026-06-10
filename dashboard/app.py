@@ -46,14 +46,19 @@ if run:
             with st.spinner(f"Running 6-agent analysis for {symbol}…"):
                 start = time.perf_counter()
                 try:
-                    report, timings = run_full_analysis(symbol)
+                    result = run_full_analysis(symbol)
                     elapsed = time.perf_counter() - start
-                    out_path = save_report(symbol, report)
+                    out_path = save_report(symbol, result.markdown, result.report_json)
                 except Exception as exc:
                     st.error(f"Analysis failed: {exc}")
                 else:
                     st.success(f"Done in {elapsed:.0f}s — saved to `{out_path}`")
                     with st.expander("Agent timings"):
-                        for name, sec in timings.items():
+                        for name, sec in result.timings.items():
                             st.write(f"{name}: {sec:.1f}s")
-                    st.markdown(report)
+                    rejections = result.report_json.get("audit", {}).get("rejections", [])
+                    if rejections:
+                        with st.expander("Grader rejections"):
+                            for entry in rejections:
+                                st.warning(str(entry))
+                    st.markdown(result.markdown)

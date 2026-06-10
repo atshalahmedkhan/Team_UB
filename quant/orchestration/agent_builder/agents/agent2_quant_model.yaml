@@ -1,0 +1,6 @@
+id: agent2_quant_model
+name: Agent 2 — Quant Model
+model: gemini-2.5-flash-lite
+tools: []
+python_handler: quant.agents.gemini_agents.run_quant_model_agent
+output: ModelResult
