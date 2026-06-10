@@ -19,6 +19,7 @@ elasticsearch>=8.0
 
 # UI
 streamlit>=1.30
+plotly>=5.18
 
 # API
 fastapi>=0.115
