@@ -135,10 +135,13 @@ def run_full_analysis(
 
     agent_name = "Agent 2 — Quant model"
     quant_model: dict[str, Any] = {}
+    prior_rejections: list[str] = []
     for attempt in range(MAX_QUANT_RETRIES):
         _notify(on_progress, "agent_start", agent_name)
         t0 = time.perf_counter()
-        quant_model = run_quant_model_agent(symbol, extracted)
+        quant_model = run_quant_model_agent(
+            symbol, extracted, prior_rejections=prior_rejections or None
+        )
         timings[agent_name] = time.perf_counter() - t0
         _notify(on_progress, "agent_done", agent_name, timings[agent_name])
 
@@ -155,6 +158,7 @@ def run_full_analysis(
                 "rejections": grade.rejections,
             }
         )
+        prior_rejections = list(grade.rejections)
         print(f"  [Grader] Rejected Agent 2 output (attempt {attempt + 1}/{MAX_QUANT_RETRIES})")
         for rejection in grade.rejections:
             print(f"    - {rejection}")

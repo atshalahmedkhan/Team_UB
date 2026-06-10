@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from quant.schemas.report import Analog, Audit, FinalReport, NarrativeFlag
+from quant.schemas.report import Analog, Audit, BeatMiss, Citation, FinalReport, NarrativeFlag
 
 MAX_QUANT_RETRIES = 2
 SynthesizeFn = Callable[[str], str]
@@ -130,6 +130,11 @@ def _sections_1_2(
     section1 += f"- Gross margin: {extraction.get('gross_margin')}\n"
     section1 += f"- Operating margin: {extraction.get('operating_margin')}\n"
     section1 += f"- Beat/miss: {quant_model.get('beat_miss_assessment', 'N/A')}\n"
+    for row in (quant_model.get("beats_misses") or [])[:5]:
+        section1 += (
+            f"- {row.get('metric')}: actual={row.get('actual')} vs "
+            f"consensus={row.get('consensus')} → {row.get('verdict')}\n"
+        )
     for flag in (quant_model.get("flags") or [])[:5]:
         section1 += f"- Flag: {flag}\n"
 
@@ -192,13 +197,16 @@ def run(
     macro_prompt = f"""Write two report sections in markdown for {ticker}.
 
 SECTION 3 — MACRO REGIME CONTEXT
+Note: Macro analogs reflect TODAY's overall market regime (rates, vol, credit) and are the same
+for every ticker on this date — they are not ticker-specific price analogs.
 Today's regime: {fingerprint.get('regime_label')}
 Description: {fingerprint.get('description')}
-Top analog dates:
+Top analog dates (market-wide):
 {chr(10).join(top_analog_lines)}
 Median 90d return across analogs: {analog_result.get('stats', {}).get('ret_90d', {}).get('median')}
 Write 2-3 paragraphs. Include a sentence like:
-"Today's market most resembles [DATE] ([REGIME]). In that environment, the S&P 500 returned X% over 90 days."
+"Today's market regime most resembles [DATE] ([REGIME]). In that environment, the S&P 500 returned X% over 90 days."
+Explain how this macro context combines with {ticker}'s micro earnings picture.
 
 SECTION 4 — ACTIONABLE RISKS
 Combine micro risks from narrative drift and macro risks from analog outcomes.
@@ -244,9 +252,22 @@ Grader rejections: {rejections}
         if shift:
             risks.append(f"{topic}: {shift}")
 
+    beats_misses: list[BeatMiss] = []
+    for row in model.get("beats_misses") or []:
+        beats_misses.append(
+            BeatMiss(
+                metric=str(row.get("metric", "")),
+                actual=float(row.get("actual", 0)),
+                consensus=float(row.get("consensus", 0)),
+                verdict=str(row.get("verdict", "In-line")),
+                citation=Citation(source_paragraph="SEC filing extraction (Agent 1)", page=None),
+            )
+        )
+
     final = FinalReport(
         ticker=ticker.upper(),
         generated_at=datetime.now(timezone.utc).isoformat(),
+        beats_misses=beats_misses,
         narrative_flags=_build_narrative_flags(narrative),
         analogs=_build_analogs(analog_result),
         regime_label=str(fingerprint.get("regime_label", "")),
